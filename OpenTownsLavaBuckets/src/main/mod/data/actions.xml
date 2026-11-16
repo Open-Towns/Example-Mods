@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<actions>
+
+    <action>
+        <id>qlavabucket</id>
+
+        <priorityID>itemconstruction</priorityID>
+
+        <queue>
+            <lock>carpentrybench</lock>
+
+            <pick>woodenbucket</pick>
+            <move>carpentrybench</move>
+
+            <wait>30</wait>
+            <destroyItem />
+
+            <unlock />
+
+            <createItem>lavabucket</createItem>
+        </queue>
+    </action>
+
+
+    <action>
+        <id>qdumplava</id>
+
+        <priorityID>itemconstruction</priorityID>
+
+        <queue>
+            <pick>lavabucket</pick>
+
+            <moveTerrain />
+
+            <wait>10</wait>
+
+            <placeFluid>lava</placeFluid>
+
+            <destroyItem />
+
+            <createItem>woodenbucket</createItem>
+        </queue>
+    </action>
+
+    
+
+</actions>

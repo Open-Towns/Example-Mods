@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<items>
+
+    <lavabucket>
+        <name>Bucket of lava</name>
+        <type>utils.materials</type>
+
+        <stackable>true</stackable>
+        <stackableSize>1</stackableSize>
+
+        <value>40</value>
+    </lavabucket>
+
+   
+</items>

@@ -1,0 +1,595 @@
+plugins {
+    id 'java'
+}
+
+
+/*
+ * Required mod configuration.
+ *
+ * Validate these before using them anywhere else in the
+ * build so configuration errors produce a useful message.
+ */
+def requiredProperties = [
+        'modId',
+        'modName',
+        'modVersion',
+        'modAuthor',
+        'modMainClass',
+        'openTownsApiVersion',
+        'openTownsApiJar'
+]
+
+def missingProperties =
+        requiredProperties.findAll {
+            !findProperty(it)?.toString()?.trim()
+        }
+
+if (!missingProperties.isEmpty()) {
+    throw new GradleException(
+            "Missing required properties in gradle.properties: "
+                    + missingProperties.join(', ')
+    )
+}
+
+
+group = modId
+version = modVersion
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+def modDependenciesValue =
+        findProperty('modDependencies') ?: ''
+
+
+/*
+ * Open Towns public modding API.
+ *
+ * The mod compiles against this JAR rather than the full game.
+ */
+def openTownsApiJarFile = file(openTownsApiJar)
+
+def openTownsDirectory =
+        file(
+                findProperty('openTownsDir')
+                        ?: '../Open-Towns'
+        )
+
+
+/*
+ * Towns mod installation directory.
+ *
+ * Defaults to:
+ *
+ *   C:/Users/<user>/.towns/mods
+ *
+ * Can be overridden in gradle.properties:
+ *
+ *   townsModsDir=C:/some/other/path/mods
+ */
+def configuredModsDir = findProperty('townsModsDir')
+
+def modsDirectory = configuredModsDir
+        ? file(configuredModsDir)
+        : new File(
+                System.getProperty('user.home'),
+                '.towns/mods'
+        )
+
+def installedModDirectory =
+        new File(modsDirectory, modId)
+
+/*
+ * Previous versions of the template installed using modName.
+ * Keep this temporarily so installMod can remove an old
+ * name-based installation and avoid duplicate mod discovery.
+ */
+def legacyInstalledModDirectory =
+        new File(modsDirectory, modName)
+
+        /*
+ * Static mod content.
+ *
+ * Everything inside src/main/mod is copied directly
+ * into the installed Towns mod folder.
+ */
+def modContentDirectory =
+        file('src/main/mod')
+
+
+/*
+ * Builds the Open Towns API JAR if it does not already exist.
+ */
+tasks.register('buildOpenTownsApi', Exec) {
+
+    /*
+     * If a local Open Towns checkout is available, always
+     * ask it to build apiJar.
+     *
+     * Gradle will handle the task as up-to-date when nothing
+     * has changed. This prevents mods compiling against a
+     * stale API JAR after SDK development changes.
+     */
+    onlyIf {
+        openTownsDirectory.isDirectory()
+    }
+
+    workingDir openTownsDirectory
+
+    if (System.getProperty('os.name')
+            .toLowerCase()
+            .contains('windows')) {
+
+        commandLine 'cmd',
+                '/c',
+                'gradlew.bat',
+                'apiJar'
+
+    } else {
+
+        commandLine './gradlew',
+                'apiJar'
+    }
+
+    doFirst {
+        println ""
+        println "Refreshing Open Towns API..."
+        println "Source: ${openTownsDirectory}"
+    }
+}
+
+
+/*
+ * Verifies that the Open Towns API JAR exists before
+ * attempting to compile the mod.
+ */
+tasks.register('ensureOpenTownsApi') {
+    dependsOn 'buildOpenTownsApi'
+
+    doLast {
+        if (!openTownsApiJarFile.exists()) {
+            throw new GradleException(
+                    """Open Towns API JAR was not found.
+
+Expected API JAR:
+  ${openTownsApiJarFile}
+
+Open Towns source checkout:
+  ${openTownsDirectory}
+
+Set openTownsDir and openTownsApiJar in gradle.properties."""
+            )
+        }
+    }
+}
+
+
+/*
+ * The Open Towns API is needed for compilation only.
+ *
+ * It is provided by Open Towns itself when the mod runs,
+ * so it must not be bundled inside the mod JAR.
+ */
+dependencies {
+    compileOnly files(openTownsApiJarFile)
+}
+
+
+tasks.withType(JavaCompile).configureEach {
+    dependsOn 'ensureOpenTownsApi'
+
+    options.encoding = 'UTF-8'
+    options.release = 25
+}
+
+
+/*
+ * Give the mod JAR a predictable filename.
+ *
+ * Example:
+ *
+ *   modId=better-dwarves
+ *
+ * produces:
+ *
+ *   better-dwarves.jar
+ */
+tasks.named('jar') {
+    archiveFileName = "${modId}.jar"
+}
+
+
+/*
+ * Generates mod.properties from gradle.properties.
+ *
+ * This means mod metadata only needs to be maintained
+ * in one place.
+ */
+tasks.register('generateModProperties') {
+    def outputDir =
+            layout.buildDirectory.dir(
+                    'generated/modMetadata'
+            )
+                inputs.property('modId', modId)
+    inputs.property('modName', modName)
+    inputs.property('modVersion', modVersion)
+    inputs.property('modAuthor', modAuthor)
+    inputs.property(
+            'openTownsApiVersion',
+            openTownsApiVersion
+    )
+    inputs.property(
+            'modDependencies',
+            modDependenciesValue
+    )
+    inputs.property(
+            'modMainClass',
+            modMainClass
+    )
+
+    outputs.dir(outputDir)
+
+    outputs.dir(outputDir)
+
+    doLast {
+        def directory = outputDir.get().asFile
+
+        directory.mkdirs()
+
+        def metadataFile =
+                new File(
+                        directory,
+                        'mod.properties'
+                )
+
+        metadataFile.text = """\
+id=${modId}
+name=${modName}
+version=${modVersion}
+author=${modAuthor}
+apiVersion=${openTownsApiVersion}
+dependencies=${modDependenciesValue}
+jar=${modId}.jar
+main=${modMainClass}
+"""
+    }
+}
+
+/*
+ * Validates the mod configuration and generated output.
+ *
+ * Usage:
+ *
+ *   gradlew validateMod
+ */
+tasks.register('validateMod') {
+    dependsOn 'jar'
+    dependsOn 'generateModProperties'
+
+    doLast {
+
+        println ""
+        println "Validating ${modName}..."
+
+        /*
+         * Mod IDs should be stable machine-readable identifiers.
+         *
+         * Examples:
+         *
+         *   lava-logistics
+         *   strip-mine
+         *   better-dwarves-2
+         */
+        if (!(modId ==~ /[a-z0-9]+(?:-[a-z0-9]+)*/)) {
+            throw new GradleException(
+                    "Invalid modId '${modId}'. "
+                            + "Use lowercase letters, numbers and hyphens only."
+            )
+        }
+
+
+        /*
+         * API version must be a positive integer.
+         */
+        int apiVersion
+
+        try {
+            apiVersion =
+                    openTownsApiVersion
+                            .toString()
+                            .toInteger()
+        } catch (NumberFormatException ignored) {
+            throw new GradleException(
+                    "openTownsApiVersion must be an integer. "
+                            + "Current value: ${openTownsApiVersion}"
+            )
+        }
+
+        if (apiVersion < 1) {
+            throw new GradleException(
+                    "openTownsApiVersion must be at least 1."
+            )
+        }
+
+
+        /*
+         * Validate dependencies.
+         */
+        def dependencies =
+                modDependenciesValue
+                        .split(',')
+                        .collect { it.trim() }
+                        .findAll { !it.isEmpty() }
+
+        dependencies.each { dependency ->
+
+            if (!(dependency ==~ /[a-z0-9]+(?:-[a-z0-9]+)*/)) {
+                throw new GradleException(
+                        "Invalid dependency ID '${dependency}'."
+                )
+            }
+
+            if (dependency == modId) {
+                throw new GradleException(
+                        "A mod cannot depend on itself: ${modId}"
+                )
+            }
+        }
+
+        if (dependencies.size()
+                != dependencies.unique().size()) {
+
+            throw new GradleException(
+                    "Duplicate entries found in modDependencies."
+            )
+        }
+
+
+        /*
+         * Verify the compiled JAR exists.
+         */
+        def modJar =
+                tasks.named('jar')
+                        .get()
+                        .archiveFile
+                        .get()
+                        .asFile
+
+        if (!modJar.exists()) {
+            throw new GradleException(
+                    "Compiled mod JAR was not found: "
+                            + modJar
+            )
+        }
+
+
+        /*
+         * Verify the configured main class actually exists
+         * inside the compiled mod JAR.
+         */
+       def mainClassPath =
+        modMainClass.replace('.', '/') + '.class'
+
+        def mainClassExists =
+                zipTree(modJar)
+                        .matching {
+                            include mainClassPath
+                        }
+                        .files
+                        .size() > 0
+
+        if (!mainClassExists) {
+            throw new GradleException(
+                    "Configured mod main class was not found "
+                            + "inside the JAR: "
+                            + modMainClass
+            )
+        }
+
+
+        /*
+         * Verify generated metadata exists.
+         */
+        def metadataFile =
+                layout.buildDirectory
+                        .file(
+                                'generated/modMetadata/mod.properties'
+                        )
+                        .get()
+                        .asFile
+
+        if (!metadataFile.exists()) {
+            throw new GradleException(
+                    "Generated mod.properties was not found: "
+                            + metadataFile
+            )
+        }
+
+
+        def dependencyDisplay
+
+if (dependencies.isEmpty()) {
+    dependencyDisplay = 'none'
+} else {
+    dependencyDisplay = dependencies.join(', ')
+}
+
+println "Mod validation passed."
+println "  ID:           ${modId}"
+println "  Name:         ${modName}"
+println "  Version:      ${modVersion}"
+println "  API version:  ${openTownsApiVersion}"
+println "  Main class:   ${modMainClass}"
+println "  Dependencies: ${dependencyDisplay}"
+println "  JAR:          ${modJar.name}"
+    }
+}
+
+
+/*
+ * Builds and installs the mod into the user's
+ * Open Towns mods directory.
+ */
+tasks.register('installMod') {
+    dependsOn 'validateMod'
+
+    doLast {
+        if (!modsDirectory.exists()) {
+            println ""
+            println "Creating Towns mods directory:"
+            println "${modsDirectory}"
+
+            if (!modsDirectory.mkdirs()) {
+                throw new GradleException(
+                        "Could not create Towns mods directory: "
+                        + modsDirectory
+                )
+            }
+        }
+
+        /*
+ * Treat the installed mod directory as generated output.
+ *
+ * Remove the previous installation first so deleted or
+ * renamed files cannot remain from an older build.
+ */
+if (installedModDirectory.exists()) {
+    /*
+ * Remove an installation created by older versions of the
+ * template which used the human-readable mod name as the
+ * directory name.
+ */
+if (legacyInstalledModDirectory != installedModDirectory
+        && legacyInstalledModDirectory.exists()) {
+
+    println ""
+    println "Removing legacy installation:"
+    println "${legacyInstalledModDirectory}"
+
+    delete legacyInstalledModDirectory
+}
+    println ""
+    println "Cleaning previous installation:"
+    println "${installedModDirectory}"
+
+    delete installedModDirectory
+}
+
+if (!installedModDirectory.mkdirs()) {
+    throw new GradleException(
+            "Could not create mod directory: "
+                    + installedModDirectory
+    )
+}
+
+        /*
+         * Copy the compiled mod JAR.
+         */
+        copy {
+            from tasks.named('jar')
+                    .get()
+                    .archiveFile
+
+            into installedModDirectory
+        }
+
+        /*
+         * Copy the generated mod metadata.
+         */
+        copy {
+            from layout.buildDirectory.dir(
+                    'generated/modMetadata'
+            )
+
+            include 'mod.properties'
+
+            into installedModDirectory
+        }
+        /*
+ * Copy XML, graphics and other traditional
+ * Towns mod content.
+ */
+if (modContentDirectory.exists()) {
+    copy {
+        from modContentDirectory
+        into installedModDirectory
+    }
+}
+
+        println ""
+        println "Installed ${modName} ${modVersion}"
+        println "Location: ${installedModDirectory}"
+    }
+}
+
+
+/*
+ * Convenience alias:
+ *
+ *   gradlew install
+ */
+tasks.register('install') {
+    dependsOn 'installMod'
+}
+
+
+/*
+ * Launches Open Towns from the local development checkout.
+ */
+tasks.register('runGame', Exec) {
+    workingDir openTownsDirectory
+
+    doFirst {
+        if (!openTownsDirectory.isDirectory()) {
+            throw new GradleException(
+                    "Open Towns source checkout was not found: "
+                            + openTownsDirectory
+            )
+        }
+    }
+
+    if (System.getProperty('os.name')
+            .toLowerCase()
+            .contains('windows')) {
+
+        commandLine 'cmd',
+                '/c',
+                'gradlew.bat',
+                'run'
+
+    } else {
+
+        commandLine './gradlew',
+                'run'
+    }
+}
+
+
+
+/*
+ * Development shortcut.
+ *
+ * Builds the mod,
+ * installs it,
+ * then launches Open Towns.
+ *
+ * Usage:
+ *
+ *   gradlew dev
+ */
+tasks.register('dev') {
+    dependsOn 'installMod'
+    dependsOn 'runGame'
+}
+
+
+/*
+ * When both are requested by dev, installation must finish
+ * before Open Towns is launched.
+ */
+tasks.named('runGame') {
+    mustRunAfter 'installMod'
+}

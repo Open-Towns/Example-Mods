@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<actions>
+
+
+    <action>
+    <id>qconveyor</id>
+
+    <priorityID>itemconstruction</priorityID>
+
+    <queue>
+        <pick>rmwood</pick>
+        <wait>16</wait>
+        <destroyItem />
+        <createItem>conveyor</createItem>
+    </queue>
+</action>
+
+</actions>

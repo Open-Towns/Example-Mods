@@ -1,0 +1,17 @@
+# IDE / OS
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Gradle
+.gradle/
+**/build/
+**/out/
+
+# Java
+*.class
+
+# Local Open Towns SDK / game files
+*.jar
